@@ -38,7 +38,8 @@ function filterNewJobs(oldJobs: Job[], newJobs: Job[]): Job[] {
 // 🔍 Scrape jobs
 async function scrapeJobs(): Promise<Job[]> {
   const browser = await chromium.launch({
-    headless: false // Set to true for headless mode
+    headless: true,
+    slowMo: 100
   });
 
   const context = await browser.newContext({
@@ -56,39 +57,36 @@ async function scrapeJobs(): Promise<Job[]> {
         ? BASE_URL
         : BASE_URL.replace('?jobAge=1', `-${pageNum}?jobAge=1`);
 
-    console.log(`🔎 Page ${pageNum}: ${pageUrl}`);
+    console.log(`\n🔎 Opening Page ${pageNum}: ${pageUrl}`);
 
     await page.goto(pageUrl, { waitUntil: 'domcontentloaded' });
 
-    // ✅ Stable wait
-    await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(4000);
+    await page.waitForTimeout(5000);
 
-    // ✅ Scroll for lazy loading
+    // scroll to load jobs
     for (let i = 0; i < 10; i++) {
       await page.mouse.wheel(0, 4000);
-      await page.waitForTimeout(1000);
+      await page.waitForTimeout(1200);
     }
 
-    // ✅ CORRECT SELECTOR
     const jobs: Job[] = await page.evaluate(() => {
-      const cards = document.querySelectorAll('article.jobTuple');
+      const jobLinks = document.querySelectorAll('a[href*="/job-listings"]');
 
-      return Array.from(cards).map((card) => {
-        const titleEl = card.querySelector('a.title');
-        const companyEl = card.querySelector('.comp-name');
-        const locationEl = card.querySelector('.locWdth');
+      return Array.from(jobLinks).map((link) => {
+        const parent = link.closest('div');
 
         return {
-          title: titleEl?.textContent?.trim() || '',
-          company: companyEl?.textContent?.trim() || '',
-          location: locationEl?.textContent?.trim() || '',
-          link: (titleEl as HTMLAnchorElement)?.href || ''
+          title: (link as HTMLElement).innerText?.trim() || '',
+          company:
+            (parent?.querySelector('[class*="comp"]') as HTMLElement)?.innerText?.trim() || '',
+          location:
+            (parent?.querySelector('[class*="loc"]') as HTMLElement)?.innerText?.trim() || '',
+          link: (link as HTMLAnchorElement).href
         };
       });
     });
 
-    console.log(`✅ Page ${pageNum}: ${jobs.length} jobs`);
+    console.log(`✅ Page ${pageNum} jobs found: ${jobs.length}`);
 
     allJobs.push(...jobs);
   }
@@ -99,27 +97,62 @@ async function scrapeJobs(): Promise<Job[]> {
     new Map(allJobs.map(job => [job.link, job])).values()
   );
 
-  console.log(`📊 Total unique jobs: ${uniqueJobs.length}`);
+  console.log(`\n📊 Total unique jobs: ${uniqueJobs.length}`);
 
-  return uniqueJobs.slice(0, MAX_JOBS);
+  return uniqueJobs
+    .filter(job => job.title && job.link)
+    .slice(0, MAX_JOBS);
 }
 
-// 📧 Send email
-async function sendEmail(jobs: Job[], type: 'instant' | 'daily') {
+// 📧 Beautiful Email
+async function sendEmail(jobs: Job[]): Promise<void> {
   if (jobs.length === 0) {
-    console.log("No jobs to send.");
+    console.log("No new jobs found.");
     return;
   }
 
-  const jobList = jobs
+  const jobCards = jobs
     .map(
       (job, i) => `
-${i + 1}. ${job.title}
-${job.company} | ${job.location}
-${job.link}
-`
+      <div style="padding:15px; margin-bottom:15px; border:1px solid #eee; border-radius:10px;">
+        <h3 style="margin:0; color:#2c3e50;">${i + 1}. ${job.title}</h3>
+        <p style="margin:5px 0; font-weight:600; color:#34495e;">
+          ${job.company}
+        </p>
+        <p style="margin:5px 0; color:#7f8c8d;">
+          📍 ${job.location}
+        </p>
+        <a href="${job.link}" target="_blank"
+           style="display:inline-block; margin-top:10px; padding:8px 12px;
+                  background:#3498db; color:#fff; text-decoration:none;
+                  border-radius:6px;">
+          View Job
+        </a>
+      </div>
+    `
     )
-    .join('\n');
+    .join('');
+
+  const htmlContent = `
+    <div style="font-family: Arial, sans-serif; max-width:600px; margin:auto;">
+      
+      <h2 style="text-align:center; color:#2c3e50;">
+        🚀 QA Automation Job Alerts
+      </h2>
+
+      <p style="text-align:center; color:#7f8c8d;">
+        Found ${jobs.length} new jobs for you today
+      </p>
+
+      ${jobCards}
+
+      <hr style="margin:30px 0;" />
+
+      <p style="text-align:center; font-size:12px; color:#aaa;">
+        Automated Job Bot | Built by You 😎
+      </p>
+    </div>
+  `;
 
   const transporter = nodemailer.createTransport({
     service: 'gmail',
@@ -129,40 +162,29 @@ ${job.link}
     }
   });
 
-  const subject =
-    type === 'instant'
-      ? `🚨 New Jobs Found (${jobs.length})`
-      : `📊 Daily Job Summary (${jobs.length})`;
-
   await transporter.sendMail({
-    from: process.env.EMAIL,
-    to: process.env.TO_EMAIL,
-    subject,
-    text: jobList
+    from: 'akashbhade333@gmail.com',
+    to: 'akashbhade722@gmail.com',
+    subject: `🚀 ${jobs.length} New QA Automation Jobs`,
+    html: htmlContent
   });
 
-  console.log("📧 Email sent!");
+  console.log("📧 Beautiful email sent!");
 }
 
 // 🚀 Main
 (async () => {
   try {
-    const type =
-      process.env.RUN_TYPE === 'daily' ? 'daily' : 'instant';
-
     const oldJobs = loadOldJobs();
     const scrapedJobs = await scrapeJobs();
     const newJobs = filterNewJobs(oldJobs, scrapedJobs);
 
-    console.log(`🆕 New jobs: ${newJobs.length}`);
+    console.log(`\n🆕 New jobs: ${newJobs.length}`);
 
-    if (type === 'instant') {
-      await sendEmail(newJobs, 'instant');
-    } else {
-      await sendEmail(scrapedJobs, 'daily');
-    }
+    await sendEmail(newJobs);
 
     saveJobs(scrapedJobs);
+
   } catch (err) {
     console.error("❌ Error:", err);
   }
