@@ -163,8 +163,8 @@ async function sendEmail(jobs: Job[]): Promise<void> {
   });
 
   await transporter.sendMail({
-    from: 'akashbhade333@gmail.com',
-    to: 'akashbhade722@gmail.com',
+    from: process.env.EMAIL,
+    to: process.env.TO_EMAIL,
     subject: `🚀 ${jobs.length} New QA Automation Jobs`,
     html: htmlContent
   });
